@@ -19,8 +19,11 @@ GRADE_POINTS = {
 }
 
 TABLE_NAME = os.environ.get("TABLE_NAME", "uopeople-gpa-tracker")
+BUCKET_NAME = os.environ.get("BUCKET_NAME", "uopeople-gpa-reports-230372368557")
+
 dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table(TABLE_NAME)
+s3 = boto3.client("s3")
 
 
 def calculate_gpa(items):
@@ -71,17 +74,32 @@ def lambda_handler(event, context):
     if term_filter:
         items = [i for i in items if str(i.get("term", "")).lower() == str(term_filter).strip().lower()]
 
+    scope = term_filter if term_filter else "Cumulative"
     total_hours = round(sum(float(i.get("study_hours", 0)) for i in items), 2)
     total_credits = sum(float(i.get("credits", 0)) for i in items)
+
+    summary_payload = {
+        "student_id": student_id,
+        "scope": scope,
+        "courses_count": len(items),
+        "total_credits": total_credits,
+        "total_study_hours": total_hours,
+        "gpa": calculate_gpa(items),
+    }
+
+    report_key = f"reports/{student_id}/{scope}.json"
+    if event.get("export_to_s3", True):
+        s3.put_object(
+            Bucket=BUCKET_NAME,
+            Key=report_key,
+            Body=json.dumps(summary_payload, indent=2).encode("utf-8"),
+            ContentType="application/json",
+        )
 
     return {
         "statusCode": 200,
         "body": json.dumps({
-            "student_id": student_id,
-            "scope": term_filter if term_filter else "Cumulative",
-            "courses_count": len(items),
-            "total_credits": total_credits,
-            "total_study_hours": total_hours,
-            "gpa": calculate_gpa(items),
+            **summary_payload,
+            "s3_report": f"s3://{BUCKET_NAME}/{report_key}",
         }),
     }
